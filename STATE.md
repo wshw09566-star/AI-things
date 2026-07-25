@@ -1,6 +1,6 @@
 # Current milestone and exit criteria
 
-M2 Survey graph — implementation slices integrated at `9dd3e5a`; awaiting review of two Producer recovery edits, cumulative adversarial fuzzing, and independent QA. M1 remains complete on QA PASS.
+M2 Survey graph — implementation and producer fallback fuzz integrated through `d56667d`; awaiting ENGINEER review of the recovery/fuzz edits and independent QA. M1 remains complete on QA PASS.
 
 Integrated M2 evidence:
 
