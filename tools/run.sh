@@ -24,6 +24,7 @@ case "$command" in
     # Import once so a clean clone has the GDScript global class cache required by GdUnit4.
     GODOT_SILENCE_ROOT_WARNING=1 "$GODOT_BIN" --headless --editor --path . --quit-after 1 >/dev/null
     GODOT_SILENCE_ROOT_WARNING=1 "$GODOT_BIN" --headless --path . -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd --ignoreHeadlessMode -a tests "$@"
+    bash tests/fuzz/m0_harness_test.sh
     ;;
   capture)
     output="artifacts/m0-smoke.png"; width=640; height=360
