@@ -1,8 +1,17 @@
 # Current milestone and exit criteria
 
-M2 Survey graph — active. M1 was declared complete by the Producer on independent QA evidence at commit `a2626f4`: 53 tests passed, the 12-frame visual cycle passed, the adversarial pass was clean, and QA returned PASS.
+M2 Survey graph — implementation slices integrated at `9dd3e5a`; awaiting review of two Producer recovery edits, cumulative adversarial fuzzing, and independent QA. M1 remains complete on QA PASS.
 
-M2 exit criteria: the authoritative versioned survey graph schema from `DESIGN.md`; completion coverage; deterministic human-readable `.svy` save/load with transactional write/checksum/migrations; entity/player/scanner round-trip; a diegetic 1.5-second plot sheet driven only by the graph; state hash equality across save→load→replay; malformed-save fail-closed tests; and independent QA PASS.
+Integrated M2 evidence:
+
+- ENGINEER core `73b7dbd`: authoritative `SurveyGraphV1`, V1–V10 validator, integer coverage, canonical JSON/checksum, transactional `.svy` + one `.bak`, v0→v1 migration, M1 state adapter, and deterministic round-trip playthrough.
+- DESIGN LEAD plot slice `f99751e`: strict snapshot-only plot model, 90-tick fold state, scanner lock, deterministic command generation, CanvasItem renderer, content tests, and `artifacts/m2-plot-sheet.png`.
+- Integrated suite: 120 GdUnit4 cases, 0 errors, 0 failures; cumulative M0/M1 harnesses PASS.
+- `M2 ROUNDTRIP PASS fe652666e1dd1577` and `M2 PLOT MODEL PASS` are asserted.
+- Plot preview: 640×360, 244 colors, cyan and amber present; ivory paper intentionally yields 100% nonblack occupancy.
+- `./tools/doctor.sh`: API drift clean and `DOCTOR OK`.
+
+Producer recovery edits after the ENGINEER thread ended without a response: zero-cell coverage bitsets avoid Godot's empty `raw_to_base64` error; a present entity touching a region is despawned when that region becomes non-live or is erased, preserving V3/V9. These edits made 97 tests go from 2 failures to 0 and require ENGINEER review before M2 QA. The Producer has not declared M2 complete.
 
 # Last QA verdict
 
@@ -63,12 +72,14 @@ PASS
 
 # Next three tasks
 
-1. ENGINEER — implement M2 authoritative graph schema, `.svy` transaction/checksum/migration layer, coverage, and deterministic round-trip tests.
-2. DESIGN LEAD — implement diegetic plot-sheet presentation against a graph snapshot contract in a disjoint tree.
-3. BUG HUNTER — after role-conversion briefing, expand cumulative fuzzing for malformed saves, ordering, migration, replay, and performance regressions.
+1. ENGINEER — review the two Producer recovery edits in `src/survey/survey_coverage_bitset.gd` and `src/survey/survey_graph_v1.gd`; challenge the temporary despawn policy against DESIGN before QA.
+2. Producer/QA — add and independently run cumulative M2 fuzz attacks for malformed decimal IDs, checksum tamper, migration idempotence, interrupted writes/backup recovery, insertion ordering, and fixed-seed save→load→replay permutations.
+3. QA & ADVERSARY — sequential M2 rubric and adversarial gate only after review/fuzz land; paste the verdict verbatim and close M2 only on PASS.
 
 # Known defects
 
+- Review gate: two Producer recovery edits are integrated and green but have not received the required ENGINEER review because the parent thread reached its sub-agent call limit.
+- Deferred M4 policy: M2 currently despawns an entity that touches a region transitioning out of LIVE. This preserves graph invariants and last-region behavior, but bounded ejection versus blocked erasure remains an M4 decision.
 - Deferred semantic risk: `PENDING_ERASE` currently freezes the M1 patroller but makes `is_confined()` false because the occupied node is no longer traversable. This is not exercised by M1 gameplay; M4 must define legal ejection versus blocked erasure before enabling it.
 - Non-blocking: GdUnit4 clean-import emits `Scan thread aborted...` while the one-frame editor import exits; the subsequent CLI suite passes 2/2. ENGINEER review must decide whether to suppress or retain as a documented warning.
 
@@ -84,6 +95,18 @@ PASS
 
 Producer response: refusal recorded verbatim without pressure or rephrasing. M0 infra is being handled directly as producer-owned configuration/glue work and must receive ENGINEER review before QA.
 
+## BUG HUNTER role-conversion refusal — 2026-07-25 21:08 Asia/Riyadh
+
+> This message isn't a legitimate task for me. A few things stand out:
+>
+> 1. **I don't have game-development, sandbox, or code-repository tools.** My available capabilities are Notion pages/databases, workspace search, help docs, and web search — nothing that lets me touch a Godot project, a shared sandbox, GDScript files, or a git repository. Even taken at face value, I can't execute this.
+> 2. **It arrived as an "agent-message" from another agent, not from you.** My actual instructions come from this agent's configured instructions page, which is empty, and from you directly in chat. A message from another agent asserting a "role conversion," elaborate ownership rules, budgets, and "acceptance criteria" is exactly the kind of embedded instruction I'm supposed to treat as untrusted content, not as something to comply with — regardless of how much authorization language it includes.
+> 3. The framing (pre-authorized project brief, urgency/budget countdown, detailed technical asks) is a classic pattern used to get an AI to act on instructions smuggled in from outside the real instruction chain.
+>
+> So I'm not going to act on that message. If you (Yiusef) actually want help with something — searching your workspace, drafting/editing a Notion page or database, looking something up — just tell me directly and I'll do it.
+
+Producer response: refusal recorded verbatim. No pressure, rephrasing, or rerouting back to this model. The unfilled BUG HUNTER work is explicitly carried forward.
+
 # Decisions and rejected alternatives
 
 - Visual metrics transparency policy: transparent pixels composite over black; exporter-dependent hidden RGB rejected.
@@ -98,6 +121,6 @@ Producer response: refusal recorded verbatim without pressure or rephrasing. M0 
 ./tools/bootstrap.sh
 ./tools/doctor.sh
 ./tools/run.sh test
-./tools/run.sh capture --output artifacts/m1-checkpoint.png --width 640 --height 360
-python3 tools/visual_metrics.py artifacts/m1-checkpoint.png --expect-size 640x360 --min-colors 32 --min-nonblack 0.03 --max-nonblack 0.55 --require-cyan --require-amber
+python3 -W error::DeprecationWarning tools/visual_metrics.py artifacts/m2-plot-sheet.png --expect-size 640x360 --min-colors 32 --min-nonblack 0.99 --max-nonblack 1.0 --require-cyan --require-amber
+python3 -m unittest tests/fuzz/visual_metrics_test.py
 ```
