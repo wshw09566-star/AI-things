@@ -37,6 +37,12 @@ static func decode(value: Variant, field: String, errors: Array) -> int:
 	if not is_canonical(text):
 		errors.append("%s: non-canonical integer %s" % [field, text])
 		return 0
+	var negative := text.begins_with("-")
+	var magnitude := text.substr(1) if negative else text
+	var limit := "9223372036854775808" if negative else "9223372036854775807"
+	if magnitude.length() > limit.length() or (magnitude.length() == limit.length() and magnitude > limit):
+		errors.append("%s: integer is outside signed 64-bit range" % field)
+		return 0
 	return text.to_int()
 
 static func decode_nonnegative(value: Variant, field: String, errors: Array) -> int:
