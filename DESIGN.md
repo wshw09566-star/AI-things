@@ -36,16 +36,16 @@ This document is the implementation contract. An engineer must be able to build 
 
 **Controls (rebindable):** WASD walk 2.6 m/s · crouch toggle C, 1.2 m/s · lean Q/E ±0.35 m · interact F · deploy/collapse tripod TAB (1.0 s) · scan burst LMB (hold) · plot sheet RMB (hold; 1.5 s unfold) · erase: hold X 3.0 s at a station · no jump, no sprint, no stamina.
 
-**Footsteps:** floor material tag drives synthesis and detection. Each step emits `AudibleEvent(pos, loudness L, radius r)`: rock walk r=9 m L=1.0 · rock crouch r=4 m L=0.4 · grate r=14 m L=1.5 · water r=16 m L=1.8 · salt-crust r=11 m L=1.2. Entity hearing consumes AudibleEvents via **graph distance**, not euclidean (§11).
+**Footsteps:** floor material tag drives synthesis and detection. Each step emits `AudibleEvent(pos, loudness L, radius r)`: rock walk r=9 m L=1.0 · rock crouch r=4 m L=0.4 · grate r=14 m L=1.5 · water r=16 m L=1.8 · salt-crust r=11 m L=1.2. Entity hearing consumes AudibleEvents via **graph distance** over the full generated graph — scanned *and* unscanned edges, since sound travels through tunnels, not rock — never euclidean (§11 is authoritative).
 
 **Scanner (initial targets, llvmpipe-safe; tuning range in brackets):**
 - Charge 100 max; burst costs 25 [15–35]; recharge 5/s only while tripod deployed and player stationary within 1 m of it.
 - Cone 55° full angle [45–70], range 24 m [18–28], 96×54 deterministic ray grid = 5,184 rays over 0.8 s [3k–7k rays].
-- Each hit deposits 1 point into the region's chunks. Per-region cap 60,000 points; **hard global cap 900,000** [600k–1.2M]. At cap, chunks in the farthest region decimate 2:1 in deterministic chunk-id order.
-- LOD by camera distance: render every point < 15 m, every 2nd < 30 m, every 4th < 60 m, culled beyond. Point size 2 px at 640×360, rendered via MultiMesh quads (no custom GPU compute).
+- Each hit deposits 1 point into the region's chunks. Per-region cap 60,000 points; **hard global cap 900,000** [600k–1.2M]. At cap, chunks in the farthest region decimate 2:1 in ascending chunk-id order, dropping odd point indices within each chunk and rewriting `count`. Decimation touches only stored points — never nodes, edges, or `scanned` flags — so it can never invalidate a route or a coverage cell.
+- LOD by camera distance: render every point < 15 m, every 2nd < 30 m, every 4th < 60 m, culled beyond. Point size 2 px at 640×360, rendered via MultiMesh quads (no custom GPU compute). **Visible-instance budget: ≤ 120,000 MultiMesh instances per frame** — one `MultiMeshInstance3D` per chunk, with `visible_instance_count` set each frame after frustum + LOD selection in ascending chunk-id order. The 900,000 figure is a *stored* cap, never a per-frame draw count; the 8 ms point budget is sized against the visible cap.
 - Frame budget at 640×360 / 30 fps: points ≤ 8 ms, entity sim ≤ 2 ms, audio synth ≤ 2 ms, everything else ≤ 18 ms.
 
-**Coverage & completion:** at generation, every region gets a 0.5 m coverage grid over walkable/wall surfaces (`cell_total`). A burst marks cells whose surface point lies in the cone with line-of-sight. Region is complete at ≥ 92% cells. **Global completion = Σ cells_scanned / Σ cell_total** over live (non-erased) regions, shown on the plot sheet as `SURVEY nn.n%`.
+**Coverage & completion:** at generation, every region gets a 0.5 m coverage grid over walkable/wall surfaces (`cell_total`). A burst marks cells whose surface point lies in the cone with line-of-sight. Region is complete at ≥ 92% cells. **Global completion = Σ cells_scanned / Σ cell_total** over live (non-erased) regions. If Σ cell_total over live regions is 0 (every region erased — Ending B), completion is *defined* as exactly 0.0% and no division is performed. Shown on the plot sheet as `SURVEY nn.n%`, floored to one decimal, so `100.0%` can only appear when Σ cells_scanned == Σ cell_total exactly; act gates and endings compare those integers, never the displayed string.
 
 ---
 
@@ -79,7 +79,7 @@ SEdge
   a: int, b: int          — node ids, invariant a < b
   length_mm: int
   surface: enum {ROCK, RAIL, GRATE, WATER, RUBBLE, SALT}
-  cost: int               — length_mm × multiplier: ROCK 1.0, RAIL 1.0, GRATE 1.1, RUBBLE 1.4, WATER 1.6, SALT 1.2 (rounded down)
+  cost: int               — integer-only: cost = (length_mm * permille) / 1000, truncating integer division; permille = ROCK 1000, RAIL 1000, GRATE 1100, RUBBLE 1400, WATER 1600, SALT 1200. No float arithmetic in cost or pathfinding.
   scanned: bool
 
 SRegion
@@ -87,16 +87,18 @@ SRegion
   chamber_code: String    — "CH-01"… or "DR-xx" for connective drifts
   name: String
   cell_total: int
-  cells: String           — base64 bitset of scanned coverage cells
+  cells: String           — base64 (ASCII) bitset of scanned coverage cells; bit i = cell i of the region's generation-time cell list (scanline order: ascending z, then x, then y in mm), MSB-first within each byte, length ceil(cell_total / 8) bytes
   complete: bool          — cached (≥ 92% rule)
+  status: enum {LIVE, PENDING_ERASE} — serialized as string; the §5 erasure state, must round-trip
+  erase_deadline_tick: int | null — non-null only while PENDING_ERASE (§5 step 3)
   chunk_ids: Array[int]
 
 PointChunk
   id: int
   region_id: int
-  cell: int               — spatial hash key: 64-bit Morton code of floor(pos / 4 m)
-  count: int
-  points: PackedFloat32Array — x,y,z,intensity quadruples, quantized to 1 cm
+  cell: int               — spatial hash key: 63-bit Morton interleave of the 4 m grid cell, biased so every axis is unsigned: cell = morton3(cx + 2^20, cy + 2^20, cz + 2^20) with cx = floor(pos_mm.x / 4000) etc., 21 bits per axis. Always non-negative, so it is a safe GDScript int and sorts deterministically.
+  count: int              — number of points; count * 4 == points.size()
+  points: PackedInt32Array — x,y,z,intensity quadruples; x,y,z in whole centimetres, intensity 0–255. Integers keep the JSON exact; the float32 render buffer is a derived cache rebuilt on load.
 
 StationMeta
   station_no: String      — "S-0117"
@@ -106,7 +108,8 @@ StationMeta
 Tombstone
   region_id: int
   chamber_code: String
-  erased_day: int         — in-fiction day counter
+  erased_tick: int        — authoritative sim tick of erasure; tombstones are ordered by (erased_tick, region_id) and that order is part of the state hash
+  erased_day: int         — display only, derived as 1 + playtime_ms / 86_400_000 (in-fiction day counter); never read by logic
   node_ids: Array[int]
   edge_ids: Array[int]
   cell_total: int
@@ -115,9 +118,10 @@ Tombstone
 ### 3.2 Deterministic rules
 - All dictionaries serialize with integer keys sorted ascending; arrays sorted by id. Any iteration whose order affects behavior (route ties, decimation, ejection, migration) MUST iterate sorted ids.
 - Erased region/node/edge/chunk ids live forever in tombstones and are never reused. Rescanning erased space creates a **new** region with fresh ids and empty coverage: the old knowledge (plot lines, station metadata, completion history) is irrecoverably lost.
+- **Integer time and motion.** The 60 Hz sim tick is the only clock, and one tick is *not* an integer number of milliseconds, so every duration is stored as an integer **tick count** (1.5 s = 90, 2.0 s = 120, 3.0 s = 180, 4.0 s = 240, 9.0 s = 540, 45 s = 2,700). Milliseconds appear only in display and `playtime_ms`. All motion uses an integer fixed-point accumulator: for speed v mm/s, each tick `acc += v; step_mm = acc / 60; acc -= step_mm * 60` (entity 1700, walk 2600, crouch 1200). No float positions and no delta-time dependence; accumulators are serialized (§6).
 
 ### 3.3 Validation invariants (asserted on load and after every mutation batch; GdUnit4)
-- V1 every edge's endpoints exist; a < b. V2 every node's region exists. V3 entity position refers to an existing scanned node or scanned edge. V4 completion ∈ [0,100]. V5 tombstone ids ∩ live ids = ∅. V6 every chunk's region exists and is listed in region.chunk_ids. V7 each region's scanned subgraph is connected. V8 next_ids strictly greater than any live or tombstoned id.
+- V1 every edge's endpoints exist; a < b. V2 every node's region exists. V3 if an entity instance exists, its position refers to an existing scanned node or scanned edge; when the last live region is erased the entity is despawned (§5 step 6) and V3 is vacuous. V4 completion ∈ [0,100]. V5 tombstone ids ∩ live ids = ∅. V6 every chunk's region exists and is listed in region.chunk_ids. V7 the scanned subgraph may legitimately have several components — one burst can reveal disjoint parts of a chamber, and erasing a neighbour can split one — so the asserted form is: every scanned edge has both endpoints scanned, and no scanned node or edge belongs to an erased region. V8 next_ids strictly greater than any live or tombstoned id. V9 if an entity instance exists, every node and edge of its current route is live and scanned, and its whole component is scanned. V10 the audible-event queue, entity route memory, motion accumulators, and `pending` action all survive a save→load→hash round trip (§6).
 
 ### 3.4 Migrations
 Loader switches on `version`; each migration is a pure function vN→vN+1 with a committed fixture save file per version and a GdUnit4 round-trip test. Unknown future versions refuse to load with a diegetic error.
@@ -130,7 +134,7 @@ Rendered only as a **point-density anomaly**: ~2,400 points sampled on a human s
 
 **Movement law:** exists only on scanned nodes/edges of the Survey Graph. Travels in straight measured lines between stations at a constant 1.7 m/s. Never runs. Never teleports. Stops at stations for readings. It surveys; it does not chase the current player position — it triangulates and intercepts the **plotted route**.
 
-**Suspicion:** scalar S ∈ [0,100], decays 1.0/s. Each AudibleEvent adds `L × 25 × exp(-d_graph / 20 m)` where d_graph is shortest scanned-graph distance from event to entity [decay 15–30 m].
+**Suspicion:** scalar S ∈ [0,100], decays 1.0/s. Each AudibleEvent adds `L × 25 × exp(-d_graph / 20 m)` where d_graph is the shortest distance over the **full** graph, scanned or not (§11 hearing semantics), from event to entity [decay 15–30 m]. Suspicion is stored as an integer (×10); the exponential is evaluated once per event on the tick it is consumed, so no float state accumulates across ticks.
 
 **Route prediction:** keeps the player's last 4 station-to-station legs; predicts the next leg by direction continuation on the plot; intercept node = scanned STATION/JUNCTION minimizing (entity travel time − predicted player arrival time) subject to entity arriving first. Ties: lowest node id.
 
@@ -138,26 +142,29 @@ Rendered only as a **point-density anomaly**: ~2,400 points sampled on a human s
 
 | From | Trigger | Guard | Actions | To | Timing | Interrupt / save behavior |
 |---|---|---|---|---|---|---|
-| (spawn/load) | game start or save loaded | graph has ≥1 scanned station | place at Halvard station nearest CH-05; restore serialized state verbatim on load | Survey (or serialized state) | — | load restores state, node/edge+t, timers, route exactly |
+| (spawn/load) | game start or save loaded | graph has ≥1 scanned station | place at the Halvard station of lowest graph cost to CH-05, ties broken by lowest node id; restore serialized state verbatim on load | Survey (or serialized state) | — | load restores state, node/edge+t, timers, route exactly |
 | Survey | reading finished at station | — | pick next station: lowest visit_count, tie lowest id; A* by edge cost; walk | Survey | reading 6–14 s (seeded roll per station) | mid-edge position saved as (edge_id, t); resumes same t |
-| Survey | S ≥ 40 | player in scanned space within 80 m graph dist | halt; face last event bearing | Triangulate | ≤ 0.5 s | if saved mid-halt, resumes in Triangulate with timer |
+| Survey | S ≥ 40 | latest audible event within 80 m graph dist; the player may be in unscanned space (required by the CH-02 lesson) | halt; face last event bearing | Triangulate | ≤ 0.5 s | if saved mid-halt, resumes in Triangulate with timer |
 | Survey | region containing it queued for erasure | — | begin ejection route (§5) | Withdraw | immediate | pending erasure serialized |
+| Survey | `graph_mutated` invalidates its current route or target station | — | drop route | Recalibrate | immediate | — |
 | Triangulate | 3 bearings taken | ≥2 distinct AudibleEvents recorded in last 30 s | compute intercept node; commit route | Intercept | 9.0 s fixed (3 × 3.0 s tones) | bearing count + elapsed serialized |
 | Triangulate | S < 25 before bearings done | — | discard bearings | Survey | — | — |
-| Triangulate | graph mutated (erasure/decimation touching its route) | — | drop targets | Recalibrate | immediate | — |
-| Intercept | arrived at intercept node | — | hold, listening; reading pose | Intercept (wait) | wait ≤ 45 s [30–60] | wait elapsed serialized |
+| Triangulate | `graph_mutated` from erasure touching its bearings or route (point decimation never can: it changes no node, edge, or `scanned` flag) | — | drop bearings and targets | Recalibrate | immediate | — |
+| Intercept | arrived at intercept node | — | hold, listening; reading pose | Intercept (waiting = true) | wait ≤ 45 s = 2,700 ticks [30–60] | wait elapsed serialized |
 | Intercept | player audible within 12 m graph dist while waiting | — | walk toward event along scanned edges only; halt at scanned-space boundary if route leaves scanned space | Intercept | — | — |
 | Intercept | contact: within 1.5 m of player for 2.0 s | player in scanned space | **Measurement** (§4.2) | Withdraw | 4.0 s sequence | if saved mid-measurement, measurement completes on load |
 | Intercept | wait expires or S < 10 | — | — | Survey | — | — |
 | Intercept | intercept node erased | — | — | Recalibrate | immediate | — |
-| Withdraw | measurement done, scan burst covers ≥ 30% of its points, or ejection ordered | — | route to a scanned station ≥ 3 edges away in least-player-visited region; walk | Withdraw | until arrival | route serialized |
+| Any state | measurement done, scan burst covers ≥ 30% of its points, or ejection ordered (§5) | — | route to a scanned station ≥ 3 edges away in the least-player-visited region; walk | Withdraw | until arrival | route serialized; ejection routes also carry `erase_deadline_tick` |
 | Withdraw | arrived | — | resume readings | Survey | — | — |
-| Withdraw | ejection route invalidated by further erasure | — | — | Recalibrate | immediate | — |
+| Withdraw | route invalidated by any graph mutation (a route node or edge erased) | — | — | Recalibrate | immediate | pending erasure and its deadline preserved |
 | Recalibrate | entered | — | stand still; re-run A* over current scanned graph; validate V3 | (result) | 2.0 s fixed | timer serialized |
 | Recalibrate | valid route found | — | — | Survey | — | — |
 | Recalibrate | no scanned station reachable | its component has no station | hold at nearest scanned node; retry every 5 s | Recalibrate | 5 s loop | — |
 
-**FSM invariants:** entity position always satisfies V3; no transition may place it on unscanned or erased space; all timers are integer milliseconds on the 60 Hz tick; all random rolls come from the serialized sim RNG stream.
+**FSM invariants:** entity position always satisfies V3 and V9; no transition may place it on unscanned or erased space; all timers are integer tick counts (§3.2); all random rolls come from the serialized sim RNG stream.
+
+**Totality:** the five states are Survey, Triangulate, Intercept, Withdraw, Recalibrate. `Intercept (waiting)` is Intercept with a serialized `waiting` flag, not a sixth state. Any trigger not listed for the current state is ignored — an explicit self-loop with no state change — which makes the table total over (state × trigger). The only triggers that may fire from every state are the `Any state` row above and despawn (§5 step 6).
 
 ### 4.2 Measurement (contact consequence — no combat, no death)
 The entity photographs the player: screen fills with its point density over 4.0 s, three bearing tones sound. It then confiscates the tripod and carries it to the station on its route farthest (by cost) from the contact point. The player keeps the plot sheet, must travel by memory to retrieve the tripod, and cannot scan or erase until retrieval. Repeated contact escalates only distance, never harm.
@@ -169,9 +176,10 @@ The entity photographs the player: screen fills with its point density over 4.0 
 Erasing region R (hold X 3.0 s at any station of R):
 1. Mark R `PENDING_ERASE` (plot sheet shows the region struck through in pencil).
 2. If entity not in R: skip to step 4.
-3. **Ejection:** compute Dijkstra by edge cost over the **pre-deletion** scanned graph from the entity's nearest node in R to the nearest scanned node outside R. Entity enters Withdraw and walks that route at 1.7 m/s — through a legal adjacent scanned route, never a teleport. If no scanned route exits R (isolated scanned pocket), erasure is refused with the diegetic message `CANNOT VOID — PLOT OCCUPIED`, and R reverts from PENDING_ERASE.
+3. **Ejection:** compute Dijkstra by edge cost over the **pre-deletion** scanned graph from the entity's nearest node in R to the nearest scanned node outside R (ties: lowest node id). The entity enters Withdraw and walks that route at 1700 mm/s — a legal adjacent scanned route, never a teleport. While any region is PENDING_ERASE, R's nodes are forbidden as *targets* in every state (transit only), so the entity cannot re-enter R and stall the erasure indefinitely. `erase_deadline_tick` is set to `now + 2 × route_cost_in_ticks + 300`; a Recalibrate caused by further mutation recomputes the route but never extends the deadline. **Termination:** the graph is finite, each recomputation strictly re-solves Dijkstra on the current scanned graph, remaining route cost is non-increasing between mutations, and the deadline bounds the number of recomputations — so step 3 always ends in exactly one of two outcomes: the entity stands outside R, or erasure is refused. Refusal cases, both of which revert R to LIVE and print the diegetic message `CANNOT VOID — PLOT OCCUPIED`: (a) no scanned route leaves R (isolated scanned pocket); (b) `erase_deadline_tick` passes with the entity still inside R.
 4. When R is entity-free: atomically delete R's nodes, edges, chunks, and coverage; append Tombstone; recompute global completion; remove R's plotted lines and station metadata (route knowledge loss). Player receives no map memory aid.
 5. Fire `graph_mutated`; entity FSM reacts per table (Recalibrate if affected).
+6. **Last live region.** Erasing the final live region is never refused: the entity's floor ceases to exist, so the confinement rule is satisfied by removal rather than by routing. Fixed order: skip steps 2–3, delete R, then **despawn** the entity (`entity.present = false`, no position, no route), recompute completion — exactly 0.0% by §2 — and open Ending B's raise climb. Despawn is removal, not movement, so HI1 and HI8 are untouched, and V3/V9 are vacuous while `present == false`. A despawned entity never returns, even if voided space is rescanned.
 
 Rescanning erased space builds a new region from scratch (§3.2) — safe space can be re-opened, but the old survey is gone forever.
 
@@ -181,9 +189,11 @@ Rescanning erased space builds a new region from scratch (§3.2) — safe space 
 
 One human-readable file per slot: `survey_<station>.svy` — strict JSON, fixed key order (sorted), LF endings, ASCII, integers for all quantized values.
 
-Sections: `header` {version, seed, playtime_ms, act}, `rng` {gen_stream frozen post-generation, sim_stream state (two u64 words)}, `graph` (full §3 schema), `entity` {state, edge_id+t_mm or node_id, timers_ms, route node ids, visit_counts, suspicion ×10 as int}, `player` {pos_mm, yaw/pitch centidegrees, crouched, charge ×10, tripod_deployed|carried_by_entity node_id, inventory, artifacts_read}, `pending` {action ∈ {SCAN_BURST, ERASE_HOLD, PLOT_UNFOLD, NONE}, elapsed_ms, params}.
+Sections: `header` {version, seed, tick (the authoritative clock), playtime_ms, act, checksum}, `rng` {gen_stream frozen post-generation, sim_stream state (two u64 words)}, `graph` (full §3 schema, including each region's `status` and `erase_deadline_tick`, and the tombstone list in (erased_tick, region_id) order), `entity` {present, state, waiting, edge_id+t_mm or node_id, motion accumulator, timers_ticks, bearings_taken, route node ids, visit_counts, route_memory — the last 4 station-to-station legs the prediction in §4 reads — suspicion ×10 as int}, `audio` {live AudibleEvents: pos_mm, loudness ×10, radius_mm, born_tick — the queue the 30 s Triangulate guard and suspicion decay read}, `player` {pos_mm, motion accumulator, yaw/pitch centidegrees, crouched, charge ×10, tripod_deployed|carried_by_entity node_id, inventory, artifacts_read}, `pending` {action ∈ {SCAN_BURST, ERASE_HOLD, PLOT_UNFOLD, NONE}, elapsed_ticks, params}. Any state a rule reads must appear here; the golden test below is what enforces it.
 
-**Determinism contract:** simulation runs on a fixed 60 Hz tick; all gameplay state uses integers (mm, ms, centidegrees, tenths); all randomness from the serialized sim stream. Reload is behaviorally bit-identical: GdUnit4 golden test runs scripted inputs N ticks, compares full state hash against save→load→replay of the same inputs. Interruptible actions resume from `pending.elapsed_ms` exactly.
+**Determinism contract:** simulation runs on a fixed 60 Hz tick; all gameplay state uses integers (mm, ms, centidegrees, tenths); all randomness from the serialized sim stream. Reload is behaviorally bit-identical: GdUnit4 golden test runs scripted inputs N ticks, compares full state hash against save→load→replay of the same inputs. Interruptible actions resume from `pending.elapsed_ticks` exactly.
+
+**Transactional write:** serialize to `survey_<station>.svy.tmp`, flush and close, then rename over the slot in one `DirAccess.rename`; the displaced file is kept one generation as `.bak`. `header.checksum` is FNV-1a 64 over the canonical byte stream with the checksum field zeroed. On load, order is: parse → checksum → migrate (§3.4) → validate V1–V10 → rebuild derived caches (point buffers, coverage counts). Any failure, or an unknown `version`, refuses the slot with a diegetic error and offers `.bak`; a partially written `.tmp` is never loaded.
 
 ---
 
@@ -276,18 +286,18 @@ All audio generated at runtime via AudioStreamGenerator + additive/subtractive D
 
 ## 12. Testability Hooks & Milestones
 
-**Hooks:** `--sim` headless mode (no renderer) running the 60 Hz tick with scripted input tapes; state-hash function over SurveyGraph+entity+player; telemetry asserts (V1–V8, FSM invariants) hot in debug builds; deterministic screenshot harness for F01–F12; per-system GdUnit4 suites keyed to milestones.
+**Hooks:** `--sim` headless mode (no renderer) running the 60 Hz tick with scripted input tapes; state-hash function over SurveyGraph+entity+player; telemetry asserts (V1–V10, FSM invariants) hot in debug builds; deterministic screenshot harness for F01–F12; per-system GdUnit4 suites keyed to milestones.
 
 - **M0** repo, CI, GdUnit4 harness, `--sim` skeleton.
-- **M1** Survey Graph + serialization + invariants + migration fixture (§3, §6 format).
+- **M1** Survey Graph + serialization + invariants V1–V10 + migration fixture + **state-hash function and the save→load→replay golden harness** (§3, §6). The determinism contract is an M1 deliverable, not an M9 one: every later milestone lands its own replay case, so no system that must be deterministic ships before the test that proves it.
 - **M2** player movement, footstep surfaces, AudibleEvents (§2, §11 events).
-- **M3** scanner: cone cast, chunks, caps, LOD, coverage % (§2).
+- **M3** scanner: cone cast, chunks, stored caps, LOD, visible-instance budget profiled on llvmpipe, coverage % (§2).
 - **M4** plot sheet render + 1.5 s unfold + completion display (§2).
 - **M5** entity FSM complete vs transition table incl. boundary halt (§4).
 - **M6** erasure + ejection + tombstones + refusal case (§5).
 - **M7** procgen + 12 chambers + guarantees G1–G8 (§8).
 - **M8** artifacts A01–A25 placed; audio language complete (§9, §11).
-- **M9** acts, both endings, golden determinism test, F01–F12 captures, 40+25 min content audit.
+- **M9** acts, both endings (incl. §5 step 6 total-erasure despawn), full-run golden determinism replay on the M1 harness, F01–F12 captures, 40+25 min content audit.
 
 ---
 
@@ -296,7 +306,7 @@ All audio generated at runtime via AudioStreamGenerator + additive/subtractive D
 **Non-goals:** no combat, no player death, no jump-scare triggers or stingers, no chase sequences, no flashlight-battery or stamina economies, no GPU compute or custom render pipelines, no multiplayer, no downloaded/licensed assets, no online services, no minimap HUD.
 
 **Hard invariants:**
-- HI1 The entity occupies only scanned graph space; it never teleports (including ejection and load).
+- HI1 The entity occupies only scanned graph space; it never teleports (including ejection and load). Total erasure removes the entity (§5 step 6); removal is not movement.
 - HI2 The Survey Graph is the sole source of spatial truth; renderer state is derived cache.
 - HI3 Erasure is irreversible knowledge loss; ids are never reused; tombstones are permanent.
 - HI4 Save→load→resume is behaviorally bit-identical under the golden test.
@@ -313,3 +323,47 @@ All audio generated at runtime via AudioStreamGenerator + additive/subtractive D
 2. **Measurement severity:** tripod confiscation distance (farthest station) may be too punitive early; alternative is nearest Halvard station in Act I only.
 3. **Act III gate:** Ending B requires erasing regions while standing in shrinking scanned space; if playtests show softlocks near the raise, allow the final region to auto-void on cage contact instead of at the shaft threshold.
 4. **Point cap value:** 900k assumed viable on llvmpipe at 2 px; if M3 profiling disagrees, drop to 600k and tighten per-region cap to 45k.
+
+---
+
+## 15. Engineering review
+
+Implementability pass over §§2–13 for Godot 4.7.1 GDScript, fully offline, software rasterizer (llvmpipe, 1 vCPU, 640×360). Amendments were surgical: the core inversion, the 12 chamber briefs, the 25 artifacts, the 40-minute content floor, and both endings are unchanged.
+
+### 15.1 Defects found and corrected
+
+1. **Completion had no value at zero live regions** — Ending B (all regions erased) divided by an empty denominator. Completion is now *defined* as exactly 0.0% in that case, and the 100.0% gate compares integers rather than the floored display string (§2).
+2. **`SRegion` could not express PENDING_ERASE**, the state §5 depends on, so a pending erasure could not round-trip through a save. Added `status` and `erase_deadline_tick` (§3.1).
+3. **Total erasure broke the confinement invariant.** Erasing the last live region would either be refused as `CANNOT VOID — PLOT OCCUPIED` (softlocking Ending B) or leave the entity standing on deleted space. Added §5 step 6 (despawn), made V3/V9 conditional on an entity existing, and clarified HI1 that removal is not movement.
+4. **The transition table was not total.** Route-destroying mutations were only handled from Triangulate, Intercept, and Withdraw-during-ejection; the Withdraw-entry row listed Withdraw as its own source state; `Intercept (wait)` read like a sixth state. Added a Survey→Recalibrate mutation row, restated the entry row as `Any state`, made `waiting` a serialized flag on Intercept, and added an explicit rule that unlisted triggers are ignored self-loops (§4.1).
+5. **Ejection had no termination bound and one missing failure case**, and the entity could legally re-target the pending region and stall erasure forever. Added the no-targets-inside-R rule, `erase_deadline_tick`, an explicit termination argument, and the deadline refusal case (§5 step 3).
+6. **The save file omitted state that live rules read**: the AudibleEvent queue behind the 30 s Triangulate guard, the 4-leg route memory behind prediction, bearings taken, motion accumulators, region erase status, and the tick clock. Reload could not have been behaviorally identical. All added, plus invariant V10 (§6, §3.3).
+7. **“Integer milliseconds on the 60 Hz tick” is not representable** (a tick is 16.666… ms). Durations are now integer tick counts, and motion uses an integer per-tick accumulator so 1700/2600/1200 mm/s are exact and frame-rate independent (§3.2).
+8. **`cost: int` was computed from float multipliers.** Now integer permille with truncating division (§3.1).
+9. **A “64-bit Morton code” of signed grid coordinates** overflows or goes negative in a GDScript int. Now a biased 21-bits-per-axis interleave: always non-negative, stable to sort (§3.1).
+10. **`PackedFloat32Array` point storage contradicted the integer / human-readable JSON rule.** Points are stored as centimetre integers; the float32 render buffer is a derived cache rebuilt on load (§3.1).
+11. **The coverage bitset had no defined bit order, origin, or length.** Pinned to the region's generation-time cell list in scanline order, MSB-first, ceil(cell_total/8) bytes (§3.1).
+12. **V7 was unmaintainable as written** (“each region's scanned subgraph is connected”): one burst can reveal disjoint parts of a chamber, and erasing a neighbour can split a component. Replaced with an assertable edge/region form, plus V9 covering the entity's route and component (§3.3).
+13. **Hearing distance contradicted itself** — §11 propagates along scanned *and* unscanned edges, §4 said scanned-only. §11 is now authoritative in both places, and suspicion is stored as an int ×10 (§2, §4).
+14. **The Survey→Triangulate guard contradicted the mandatory CH-02 lesson**, where the player stands in unscanned dark. The guard now keys off event graph distance; contact/Measurement still requires the player in scanned space, so confinement and the taught rule both hold (§4.1).
+15. **Point decimation was cited as a route-invalidating mutation**, but it only rewrites stored points. Corrected in both places and its drop order made explicit (§2, §4.1).
+16. **900k stored points was implicitly also a per-frame draw count**, which 1 vCPU llvmpipe cannot carry. Added an explicit ≤120k visible-instance budget through per-chunk `MultiMeshInstance3D.visible_instance_count` (§2).
+17. **Tombstones carried only an in-fiction day**, giving no deterministic mutation ordering. Added `erased_tick` and a fixed (erased_tick, region_id) order that participates in the state hash (§3.1).
+18. **Save writes were neither transactional nor integrity-checked.** Added tmp + atomic rename, one-generation `.bak`, an FNV-1a 64 checksum, and a fixed parse→checksum→migrate→validate→rebuild load order (§6).
+19. **The determinism contract was only testable at M9**, after every system obliged to satisfy it. State hash and the save→load→replay harness moved to M1, with per-milestone replay cases (§12).
+
+### 15.2 Reviewed and accepted as implementable without change
+
+- **Godot API surface.** Cone casting via `intersect_ray` (5,184 rays over 48 ticks ≈ 108/tick), MultiMesh point rendering with vertex colour and an unshaded material, `AudioStreamGenerator` DSP, `DirAccess.rename`, JSON: all core Godot 4.7.1 GDScript. No GPU compute, no custom pipeline, no imported assets, no network.
+- **Scanner and point budgets.** Charge 100 / burst 25 / 5 per s, 55° × 24 m, 96×54 deterministic grid, 60k per-region and 900k global *stored* caps, LOD tiers — all consistent with the 8/2/2/18 ms frame split once the visible-instance cap above is honoured.
+- **Graph schema semantics.** Node/edge/region ownership, `a < b`, monotonic never-reused ids, tombstone permanence, 4 m spatial hash, sorted-id iteration for every order-sensitive operation, and migration-by-pure-function are coherent and serializable as strict JSON.
+- **Milestone order.** M0→M9 has no inversion: graph and serialization precede the FSM, AudibleEvents precede hearing, the scanner precedes coverage and the plot sheet, the FSM precedes erasure, procgen precedes the guarantee suite. With correction 19, nothing that must be deterministic ships before its proof.
+- **Confinement.** The entity remains inside scanned, live space on every corrected path: Survey routing, Triangulate, Intercept boundary halt, ejection, Recalibrate, load, and despawn.
+- **Consistency with the fixed constraints.** No remaining contradiction with the core inversion, GDScript-only / offline / procedural-plain-text assets, 12 chambers, 25 artifacts, the 40-minute critical path, or the two endings.
+
+### 15.3 Accepted risks
+
+- 44.1 kHz synthesis in GDScript inside a 2 ms frame slice on 1 vCPU is the tightest budget in the document. Fallback: mix ambience at 22.05 kHz and keep footsteps and bearing tones at full rate. No rule depends on the sample rate.
+- 900k stored points and 120k visible instances remain profiling targets; §14.4's ranges already cover dropping to 600k / 45k without altering a rule.
+- Base64 coverage bitsets are ASCII but not eyeball-readable. Accepted for size: the cell list they index is regenerable from the seed, and every other field stays readable.
+- §14's four forks are genuine design decisions for the design lead and producer; none blocks implementation as written.
