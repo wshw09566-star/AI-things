@@ -3,3 +3,6 @@
 reports/
 test-reports/
 .DS_Store
+__pycache__/
+*.py[cod]
+godot/
