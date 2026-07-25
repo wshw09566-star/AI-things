@@ -1,6 +1,6 @@
 # Current milestone and exit criteria
 
-M0 Provision — pending. Exit: `./tools/doctor.sh` prints `DOCTOR OK`, the smoke test passes, and a real 640×360 llvmpipe screenshot is committed.
+M0 Provision — active in shared sandbox `i93cr1v2zv6iqg96dfncr`, using `wshw09566-star/AI-things`. Exit: `./tools/doctor.sh` prints `DOCTOR OK`, the smoke test passes, and a real 640×360 llvmpipe screenshot is committed.
 
 # Last QA verdict
 
@@ -27,4 +27,8 @@ None recorded.
 
 # Rebuild and test commands
 
-Pending M0 provisioning.
+`./tools/doctor.sh`
+
+`./tools/run.sh test`
+
+`./tools/run.sh capture --output artifacts/m0-smoke.png --width 640 --height 360`
