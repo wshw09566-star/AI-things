@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="HOLLOW SURVEY"
-run/main_scene="res://scenes/bootstrap.tscn"
+run/main_scene="res://scenes/m1/sorting_hall.tscn"
 config/features=PackedStringArray("4.7")
 
 [display]
