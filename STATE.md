@@ -1,6 +1,6 @@
 # Current milestone and exit criteria
 
-M0 Provision — implementation merged at `d36c427` and independently re-run from clean clone; awaiting ENGINEER review of producer-authored infrastructure and then QA gate. Exit remains: `./tools/doctor.sh` prints `DOCTOR OK`, GdUnit4 passes, a real 640×360 llvmpipe screenshot is committed, adversarial M0 checks are clean, and QA returns PASS.
+M0 Provision — implementation merged at `d36c427` and independently re-run from clean clone. `DESIGN.md` passed ENGINEER implementability review with 19 corrections at `b5a7c36`. M0 infrastructure is now under separate ENGINEER review before the QA gate. Exit remains: `./tools/doctor.sh` prints `DOCTOR OK`, GdUnit4 passes, a real 640×360 llvmpipe screenshot is committed, adversarial M0 checks are clean, and QA returns PASS.
 
 Evidence from clean clone `/work/verify-m0` in shared sandbox `i93cr1v2zv6iqg96dfncr`:
 
@@ -16,7 +16,7 @@ No QA verdict yet — session one.
 
 # Next three tasks
 
-1. ENGINEER — finish `DESIGN.md` implementability review and review producer-authored M0 infrastructure before QA.
+1. ENGINEER — review producer-authored M0 infrastructure and fix defects with regression coverage.
 2. QA & ADVERSARY — run the pinned M0 rubric and adversarial checks sequentially; return per-item PASS/FAIL and defects.
 3. ENGINEER + DESIGN LEAD — begin M1 only after M0 QA PASS: one chamber, controller, persistent scan cloud, and scanned-space entity confinement.
 
@@ -38,6 +38,8 @@ Producer response: refusal recorded verbatim without pressure or rephrasing. M0 
 
 # Decisions and rejected alternatives
 
+- Rescan-after-erasure identity: rescanning voided space creates a new region with fresh IDs and no restored knowledge; permanent unscannability rejected because it risks blocking the VOID ending.
+- M0 producer-authored configuration requires independent ENGINEER review before QA; self-verification alone rejected as milestone evidence.
 - Private GitHub repository selected by default to avoid publishing unfinished work.
 - One shared E2B sandbox selected as required; separate per-agent sandboxes rejected.
 
