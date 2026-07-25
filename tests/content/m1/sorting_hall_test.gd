@@ -58,3 +58,41 @@ func test_entity_anomaly_parented_in_scanned_zone() -> void:
 	var center: Vector3 = hall.cloud_centroid("EntityAnomaly") + anomaly.position
 	var planar := Vector2(center.x, center.z).distance_to(Vector2(west.position.x, west.position.z))
 	assert_float(planar).is_less(4.0)
+
+func test_all_twelve_shot_ids_resolve_to_distinct_camera_poses() -> void:
+	var hall := _spawn_hall()
+	var default_pose: Array = hall.camera_pose_for_shot("")
+	var seen := {}
+	for n in range(1, 13):
+		var shot_id := "f%02d" % n
+		var pose: Array = hall.camera_pose_for_shot(shot_id)
+		assert_int(pose.size()).is_equal(2)
+		assert_bool(pose[0] == default_pose[0] and pose[1] == default_pose[1]).is_false()
+		var key := "%s|%s" % [pose[0], pose[1]]
+		assert_bool(seen.has(key)).is_false()
+		seen[key] = shot_id
+	assert_int(seen.size()).is_equal(12)
+
+func test_shot_id_inferred_from_output_filename() -> void:
+	var hall := _spawn_hall()
+	assert_str(hall.shot_id_from_output("/work/wt-m1-frames/artifacts/m1-frames/m1-f01.png")).is_equal("f01")
+	assert_str(hall.shot_id_from_output("artifacts/m1-frames/m1-f12.png")).is_equal("f12")
+	assert_str(hall.shot_id_from_output("artifacts/m0-smoke.png")).is_equal("")
+	assert_str(hall.shot_id_from_output("")).is_equal("")
+
+func test_default_output_keeps_accepted_camera() -> void:
+	var hall := _spawn_hall()
+	var constants: Dictionary = (load(SCRIPT_PATH) as GDScript).get_script_constant_map()
+	var camera: Camera3D = hall.get_node("SurveyCamera")
+	assert_bool(camera.position.is_equal_approx(constants["DEFAULT_CAMERA_POSITION"])).is_true()
+	var pose: Array = hall.camera_pose_for_shot("no-token")
+	assert_bool(pose[0] == constants["DEFAULT_CAMERA_POSITION"]).is_true()
+	assert_bool(pose[1] == constants["DEFAULT_CAMERA_TARGET"]).is_true()
+
+func test_anomaly_stays_inside_scanned_zone_for_qa_set() -> void:
+	var hall := _spawn_hall()
+	var anomaly: MultiMeshInstance3D = hall.get_node("ScannedZone/EntityAnomaly")
+	assert_object(anomaly.get_parent()).is_same(hall.get_node("ScannedZone"))
+	var centroid: Vector3 = hall.cloud_centroid("EntityAnomaly")
+	assert_float(centroid.x).is_between(-4.1, -1.9)
+	assert_float(centroid.z).is_between(-19.6, -14.0)

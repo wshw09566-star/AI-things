@@ -21,6 +21,28 @@ const ANOMALY_WHITE := Color(0.93, 0.95, 0.96)
 const WEST_EXIT_CENTER := Vector3(-3.0, 1.5, -20.0)
 const EAST_EXIT_CENTER := Vector3(3.0, 1.5, -20.0)
 
+const DEFAULT_CAMERA_POSITION := Vector3(0.4, 1.65, 1.3)
+const DEFAULT_CAMERA_TARGET := Vector3(-0.2, 1.1, -19.0)
+
+## M1 visual-QA 12-frame shot list. Keys are filename tokens (output basename
+## m1-f01 -> "f01"); values are [camera position, look-at target]. Fully deterministic:
+## no random camera placement. Unknown or absent tokens keep the accepted
+## default camera above.
+const SHOT_POSES := {
+	"f01": [Vector3(0.0, 2.6, 1.9), Vector3(0.0, 1.0, -19.0)], # wide establishing from the cage-side entrance
+	"f02": [Vector3(-2.6, 2.1, -2.4), Vector3(1.2, 0.6, -12.5)], # amber fresh-survey structure diagonal
+	"f03": [Vector3(0.0, 1.7, -11.5), Vector3(0.0, 1.6, -20.0)], # both exits: cyan west vs black east
+	"f04": [Vector3(-1.4, 1.3, -15.2), Vector3(-3.0, 1.1, -18.5)], # white entity anomaly at scanned boundary
+	"f05": [Vector3(0.4, 1.25, -3.6), Vector3(1.5, 1.05, -5.5)], # station marker tripod close
+	"f06": [Vector3(2.6, 1.35, -3.2), Vector3(-0.45, 1.05, -14.0)], # conveyor silhouette down the spine
+	"f07": [Vector3(1.6, 1.7, -5.6), Vector3(4.3, 0.5, -9.6)], # archive crates near the east wall
+	"f08": [Vector3(-4.3, 1.8, 0.8), Vector3(-5.55, 2.4, -14.0)], # pillar rhythm depth along the west wall
+	"f09": [Vector3(-4.6, 1.4, -16.8), Vector3(-2.8, 1.5, -20.1)], # scanned west-exit close with cyan residue
+	"f10": [Vector3(2.3, 1.6, -14.8), Vector3(3.2, 1.4, -20.0)], # unscanned east-exit black threshold
+	"f11": [Vector3(0.0, 5.3, -5.2), Vector3(0.0, 0.0, -11.5)], # overhead survey-density composition
+	"f12": [Vector3(0.9, 0.3, -0.6), Vector3(3.2, 2.4, -19.8)], # low-angle darkness/depth stress shot
+}
+
 var _capture_path := ""
 var _frames_waited := 0
 # Generated point sets kept by cloud name so tests can verify content without
@@ -30,14 +52,14 @@ var _cloud_points := {}
 func _ready() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SCENE_SEED
-	_build_camera()
+	_capture_path = _read_capture_path()
+	_build_camera(shot_id_from_output(_capture_path))
 	_build_environment()
 	_build_lamp()
 	_build_silhouettes()
 	_build_exits()
 	_build_scanned_zone(rng)
 	_build_station_marker()
-	_capture_path = _read_capture_path()
 
 func _process(_delta: float) -> void:
 	if _capture_path.is_empty():
@@ -75,13 +97,26 @@ func cloud_centroid(cloud_name: String) -> Vector3:
 		mean += point
 	return mean / float(points.size())
 
-func _build_camera() -> void:
+func _build_camera(shot_id: String) -> void:
 	var camera := Camera3D.new()
 	camera.name = "SurveyCamera"
 	camera.fov = 68.0
-	camera.position = Vector3(0.4, 1.65, 1.3)
+	var pose := camera_pose_for_shot(shot_id)
+	camera.position = pose[0]
 	add_child(camera)
-	camera.look_at(Vector3(-0.2, 1.1, -19.0))
+	camera.look_at(pose[1])
+
+static func shot_id_from_output(path: String) -> String:
+	var base := path.get_file().get_basename().to_lower()
+	for part in base.replace("_", "-").replace(".", "-").split("-"):
+		if SHOT_POSES.has(part):
+			return part
+	return ""
+
+static func camera_pose_for_shot(shot_id: String) -> Array:
+	if SHOT_POSES.has(shot_id):
+		return SHOT_POSES[shot_id]
+	return [DEFAULT_CAMERA_POSITION, DEFAULT_CAMERA_TARGET]
 
 func _build_environment() -> void:
 	var world := WorldEnvironment.new()
