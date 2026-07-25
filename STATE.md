@@ -8,6 +8,7 @@ Evidence from clean clone `/work/verify-m0` in shared sandbox `i93cr1v2zv6iqg96d
 - API-drift self-test: 13 fixtures; lint clean.
 - GdUnit4: 2 cases, 0 errors, 0 failures, exit 0.
 - llvmpipe capture: 640×360 PNG, 215 colors.
+- Build cache release: `hollow-survey-m0-cache-v1` contains the official Godot 4.7.1 archive, disposable import cache, and SHA256 manifest. Godot archive SHA256: `c7ff14fd28472c8d4f193043de30278dcf7e5241a1dcf7566b02e27addaa33ba`.
 - Remote: `wshw09566-star/AI-things`, branch `main` at `edd3564` or later.
 
 # Last QA verdict
