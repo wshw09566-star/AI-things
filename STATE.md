@@ -6,12 +6,12 @@ Integrated M2 evidence:
 
 - ENGINEER core `73b7dbd`: authoritative `SurveyGraphV1`, V1–V10 validator, integer coverage, canonical JSON/checksum, transactional `.svy` + one `.bak`, v0→v1 migration, M1 state adapter, and deterministic round-trip playthrough.
 - DESIGN LEAD plot slice `f99751e`: strict snapshot-only plot model, 90-tick fold state, scanner lock, deterministic command generation, CanvasItem renderer, content tests, and `artifacts/m2-plot-sheet.png`.
-- Integrated suite: 120 GdUnit4 cases, 0 errors, 0 failures; cumulative M0/M1 harnesses PASS.
-- `M2 ROUNDTRIP PASS fe652666e1dd1577` and `M2 PLOT MODEL PASS` are asserted.
+- Integrated suite: 125 GdUnit4 cases, 0 errors, 0 failures; cumulative M0/M1 harnesses PASS.
+- `M2 ROUNDTRIP PASS fe652666e1dd1577`, `M2 PLOT MODEL PASS`, and `M2 SAVE FUZZ PASS 100` are asserted.
 - Plot preview: 640×360, 244 colors, cyan and amber present; ivory paper intentionally yields 100% nonblack occupancy.
 - `./tools/doctor.sh`: API drift clean and `DOCTOR OK`.
 
-Producer recovery edits after the ENGINEER thread ended without a response: zero-cell coverage bitsets avoid Godot's empty `raw_to_base64` error; a present entity touching a region is despawned when that region becomes non-live or is erased, preserving V3/V9. These edits made 97 tests go from 2 failures to 0 and require ENGINEER review before M2 QA. The Producer has not declared M2 complete.
+Producer recovery edits after the ENGINEER thread ended without a response: zero-cell coverage bitsets avoid Godot's empty `raw_to_base64` error; a present entity touching a region is despawned when that region becomes non-live or is erased, preserving V3/V9; strict signed-64-bit overflow checks reject decimal strings that GDScript would otherwise clamp. These edits made 97 tests go from 2 failures to 0 and require ENGINEER review before M2 QA. The Producer has not declared M2 complete.
 
 # Last QA verdict
 
@@ -72,13 +72,13 @@ PASS
 
 # Next three tasks
 
-1. ENGINEER — review the two Producer recovery edits in `src/survey/survey_coverage_bitset.gd` and `src/survey/survey_graph_v1.gd`; challenge the temporary despawn policy against DESIGN before QA.
-2. Producer/QA — add and independently run cumulative M2 fuzz attacks for malformed decimal IDs, checksum tamper, migration idempotence, interrupted writes/backup recovery, insertion ordering, and fixed-seed save→load→replay permutations.
+1. ENGINEER — review the Producer recovery edits in `src/survey/survey_coverage_bitset.gd`, `src/survey/survey_graph_v1.gd`, `src/survey/survey_int_codec.gd`, and the producer-owned M2 fuzz corpus; challenge the temporary despawn policy against DESIGN before QA.
+2. QA — independently extend the landed cumulative M2 fuzz attacks with migration idempotence, interrupted-write injection, and save→load→continue replay permutations beyond the current 100 fixed-seed save/load cases.
 3. QA & ADVERSARY — sequential M2 rubric and adversarial gate only after review/fuzz land; paste the verdict verbatim and close M2 only on PASS.
 
 # Known defects
 
-- Review gate: two Producer recovery edits are integrated and green but have not received the required ENGINEER review because the parent thread reached its sub-agent call limit.
+- Review gate: Producer recovery edits and the M2 save fuzz corpus are integrated and green but have not received the required ENGINEER review because the parent thread reached its sub-agent call limit.
 - Deferred M4 policy: M2 currently despawns an entity that touches a region transitioning out of LIVE. This preserves graph invariants and last-region behavior, but bounded ejection versus blocked erasure remains an M4 decision.
 - Deferred semantic risk: `PENDING_ERASE` currently freezes the M1 patroller but makes `is_confined()` false because the occupied node is no longer traversable. This is not exercised by M1 gameplay; M4 must define legal ejection versus blocked erasure before enabling it.
 - Non-blocking: GdUnit4 clean-import emits `Scan thread aborted...` while the one-frame editor import exits; the subsequent CLI suite passes 2/2. ENGINEER review must decide whether to suppress or retain as a documented warning.
