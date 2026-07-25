@@ -1,8 +1,17 @@
 # Current milestone and exit criteria
 
-M1 Vertical slice skeleton — active. M0 was declared complete by the Producer on independent QA evidence at commit `f1cd233`: all tests and lint passed, the adversarial pass was clean, and QA returned PASS.
+M1 Vertical slice skeleton — implementation integrated at `bca9417`; awaiting independent QA gate. M0 remains complete on QA PASS.
 
-M1 exit criteria: one authored chamber; walk/crouch/lean first-person controller; charge-up scanner producing a persistent point cloud under hard caps; entity dumb patroller restricted to scanned survey space; a deterministic headless playthrough asserting the confinement rule; and 640×360 llvmpipe frames showing the point cloud is legible. M1 is not complete until ENGINEER and DESIGN LEAD outputs are integrated, ENGINEER-reviewed where needed, QA adversarial checks are clean, and QA returns PASS.
+Integrated evidence:
+
+- ENGINEER core `1e8e4d8`: deterministic `SurveySpace`, `ScannerCore`, `PlayerMotionState`, and confined `EntityPatroller`.
+- DESIGN LEAD slice `f5f2498`: authored CH-02 Sorting Hall, two-exit occupancy composition, 3,140-instance llvmpipe-safe point scene, and content tests.
+- Full suite: 49 GdUnit4 cases, 0 errors, 0 failures; cumulative M0 fuzz PASS.
+- Deterministic playthrough: `M1 CONFINEMENT PASS entity=3 halts=476 points=120 hash=7eb78c43adf5a8a4`.
+- Integrated 640×360 llvmpipe frame: 584 colors, 27.7891% nonblack, cyan and amber both present.
+- `./tools/doctor.sh`: API drift clean and `DOCTOR OK`.
+
+M1 exit still requires independent QA rubric and adversarial PASS. The Producer has not declared M1 complete.
 
 # Last QA verdict
 
@@ -45,12 +54,14 @@ PASS
 
 # Next three tasks
 
-1. ENGINEER — implement the smallest testable M1 core: controller state, scanner persistence/caps, confinement graph, patroller, and headless playthrough.
-2. DESIGN LEAD — author the single M1 Sorting Hall chamber and llvmpipe-safe visual composition in a disjoint tree.
-3. Producer — integrate both branches, run full/fuzz/playthrough suites and 12-frame visual capture subset, then dispatch sequential QA.
+1. ENGINEER — review the producer-authored `tools/visual_metrics.py` helper only; do not self-grade M1 core.
+2. QA & ADVERSARY — sequential M1 gate: full suite, confinement playthrough, cap/reload fuzz, mid-charge save, scanned-boundary attacks, and 12-frame visual review.
+3. If QA passes, Producer closes M1 and briefs the INFRA→BUG HUNTER role conversion before opening M2; if QA fails, land each break as a failing fuzz regression before fixing.
 
 # Known defects
 
+- Deferred semantic risk: `PENDING_ERASE` currently freezes the M1 patroller but makes `is_confined()` false because the occupied node is no longer traversable. This is not exercised by M1 gameplay; M4 must define legal ejection versus blocked erasure before enabling it.
+- Tooling warning: `tools/visual_metrics.py` uses Pillow `getdata()`, which emits a deprecation warning but remains correct in the current environment; review before M1 QA.
 - Non-blocking: GdUnit4 clean-import emits `Scan thread aborted...` while the one-frame editor import exits; the subsequent CLI suite passes 2/2. ENGINEER review must decide whether to suppress or retain as a documented warning.
 
 # Sub-agent refusals
@@ -78,5 +89,6 @@ Producer response: refusal recorded verbatim without pressure or rephrasing. M0 
 ./tools/bootstrap.sh
 ./tools/doctor.sh
 ./tools/run.sh test
-./tools/run.sh capture --output artifacts/m0-smoke.png --width 640 --height 360
+./tools/run.sh capture --output artifacts/m1-checkpoint.png --width 640 --height 360
+python3 tools/visual_metrics.py artifacts/m1-checkpoint.png --expect-size 640x360 --min-colors 32 --min-nonblack 0.03 --max-nonblack 0.55 --require-cyan --require-amber
 ```
