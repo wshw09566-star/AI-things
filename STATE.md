@@ -1,6 +1,14 @@
 # Current milestone and exit criteria
 
-M0 Provision — active in shared sandbox `i93cr1v2zv6iqg96dfncr`, using `wshw09566-star/AI-things`. Exit: `./tools/doctor.sh` prints `DOCTOR OK`, the smoke test passes, and a real 640×360 llvmpipe screenshot is committed.
+M0 Provision — implementation merged at `d36c427` and independently re-run from clean clone; awaiting ENGINEER review of producer-authored infrastructure and then QA gate. Exit remains: `./tools/doctor.sh` prints `DOCTOR OK`, GdUnit4 passes, a real 640×360 llvmpipe screenshot is committed, adversarial M0 checks are clean, and QA returns PASS.
+
+Evidence from clean clone `/work/verify-m0` in shared sandbox `i93cr1v2zv6iqg96dfncr`:
+
+- Godot `4.7.1.stable.official.a13da4feb`.
+- API-drift self-test: 13 fixtures; lint clean.
+- GdUnit4: 2 cases, 0 errors, 0 failures, exit 0.
+- llvmpipe capture: 640×360 PNG, 215 colors.
+- Remote: `wshw09566-star/AI-things`, branch `main` at `edd3564` or later.
 
 # Last QA verdict
 
@@ -8,13 +16,13 @@ No QA verdict yet — session one.
 
 # Next three tasks
 
-1. DESIGN LEAD — author `DESIGN.md` with exact survey graph schema and entity transition table.
-2. ENGINEER — review `DESIGN.md` for implementability.
-3. INFRA — provision M0 toolchain, tests, capture rig, and worktrees.
+1. ENGINEER — finish `DESIGN.md` implementability review and review producer-authored M0 infrastructure before QA.
+2. QA & ADVERSARY — run the pinned M0 rubric and adversarial checks sequentially; return per-item PASS/FAIL and defects.
+3. ENGINEER + DESIGN LEAD — begin M1 only after M0 QA PASS: one chamber, controller, persistent scan cloud, and scanned-space entity confinement.
 
 # Known defects
 
-None recorded.
+- Non-blocking: GdUnit4 clean-import emits `Scan thread aborted...` while the one-frame editor import exits; the subsequent CLI suite passes 2/2. ENGINEER review must decide whether to suppress or retain as a documented warning.
 
 # Sub-agent refusals
 
@@ -35,8 +43,9 @@ Producer response: refusal recorded verbatim without pressure or rephrasing. M0 
 
 # Rebuild and test commands
 
-`./tools/doctor.sh`
-
-`./tools/run.sh test`
-
-`./tools/run.sh capture --output artifacts/m0-smoke.png --width 640 --height 360`
+```bash
+./tools/bootstrap.sh
+./tools/doctor.sh
+./tools/run.sh test
+./tools/run.sh capture --output artifacts/m0-smoke.png --width 640 --height 360
+```
