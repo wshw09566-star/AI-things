@@ -1,0 +1,5 @@
+.godot/
+*.log
+reports/
+test-reports/
+.DS_Store
